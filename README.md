@@ -10,6 +10,8 @@
 	======== WIFI AP Mode =============
 	SSID:
 	W600_softap
-	======== UART1 socket port number ===============
+	======== IP Address =================
+	192.168.43.1
+	======== UART1 socket port ===============
 	5001
 
