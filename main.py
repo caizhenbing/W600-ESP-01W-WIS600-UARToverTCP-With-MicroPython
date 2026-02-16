@@ -246,4 +246,5 @@ except Exception as e:
     print("Fatal error:", e)
     s.close()
     print("TCP server closed")
+
     print("Program exited")
