@@ -7,65 +7,6 @@ import socket
 import os
 import easyw600
 from machine import UART, Pin
-easyw600.createap()
-w600.run_ftpserver(port=21, username="admin", password="12345")
-
-sta_if = network.WLAN(network.STA_IF)
-sta_if.active(True)
-sta_if.connect("BackfireWorkshop", "a1b2c3abcd")
-while not sta_if.isconnected():
-    time.sleep(0.5)
-    print("Wi-Fi connected")
-print("IP:", sta_if.ifconfig()[0])
-ntptime.settime()
-
-
-
-
-# Initialize UART1 (e.g., 115200 baud)
-# On W600, UART1 often uses pins PB12 (TX) and PB11 (RX)
-uart = UART(1, 115200, tx=Pin(Pin.PB_12), rx=Pin(Pin.PB_11))
-
-# Create a TCP server socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.bind(('', 5001))
-s.listen(1)
-print("Bridge listening on port 5001...")
-
-while True:
-    conn, addr = s.accept()
-    conn.setblocking(False) # Non-blocking for bi-directional flow
-    print("Connected by", addr)
-    
-    try:
-        while True:
-            # 1. UART -> TCP
-            if uart.any():
-                data = uart.read()
-                conn.send(data)
-            
-            # 2. TCP -> UART
-            try:
-                msg = conn.recv(1024)
-                if msg:
-                    uart.write(msg)
-                else:
-                    break # Client closed connection
-            except OSError:
-                pass # No data available to recv
-    finally:
-        conn.close()
-
-=========================================
-# main.py -- put your code here!
-import w600
-import network
-import time
-import ntptime
-import socket
-import os
-import easyw600
-from machine import UART, Pin
 
 # Simple countdown without KeyboardInterrupt catching
 def simple_countdown(seconds=5):
@@ -246,5 +187,4 @@ except Exception as e:
     print("Fatal error:", e)
     s.close()
     print("TCP server closed")
-
     print("Program exited")
