@@ -15,3 +15,4 @@
 	======== UART1 socket port ===============
 	5001
 
+Note:REPL to Telnet Fixing ...
