@@ -1,88 +1,192 @@
-# main.py - AP + FTP + UART Bridge (original stable loop)
-import w600, network, time, socket, easyw600, gc
+# main.py -- put your code here!
+import w600
+import network
+import time
+import ntptime
+import socket
+import easyw600
 from machine import UART, Pin
 
-# ========== AP + FTP ==========
-print("AP...")
+# Simple countdown without KeyboardInterrupt catching
+def simple_countdown(seconds=3):
+    print("\n=== W600 TCP-UART Bridge Starting ===")
+    print("Starting in %d seconds..." % seconds)
+    print("To cancel: Press reset button or remove power")
+    print("")
+    
+    for i in range(seconds, 0, -1):
+        print("Countdown: %d" % i)
+        time.sleep(1)
+    
+    print("Starting now!")
+    print("=" * 40)
+
+# Execute startup countdown
+simple_countdown(5)
+
+# Directly start AP mode
+print("Starting AP mode...")
 easyw600.createap()
+
+# AP模式启动后需要等待一下才能获取到正确的IP地址
 time.sleep(2)
-print("AP: W600-AP")
+
+print("AP mode started successfully")
+print("SSID: W600-AP")
+# 注意：easyw600.createap()已经打印了IP，所以我们可以信任那个IP
+print("Please connect to W600-AP to configure device")
+
 try:
-    w600.run_ftpserver(port=21, username='admin', password='12345')
-except:
-    pass
+    ntptime.settime()
+    print("NTP time synchronized")
+except Exception as e:
+    print("NTP sync failed, continuing without time sync")
 
-# ========== UART 检测（与原代码完全相同） ==========
+try:
+    w600.run_ftpserver(port=21, username="admin", password="12345")
+    print("FTP server started (port 21)")
+except Exception as e:
+    print("FTP server failed:", e)
+
+# Initialize UART - 使用不同的方法检查UART可用性
+print("Initializing UART...")
 uart = None
-print("Init UART...")
+uart_available = False
 
+# 检查可用的UART端口
 for uart_id in [0, 1]:
     try:
-        u = UART(uart_id, 115200)
-        u.write(b'U')
+        print("Trying UART%d..." % uart_id)
+        test_uart = UART(uart_id, 115200)
+        # 尝试写入一个测试字符
+        test_uart.write(b'U')
         time.sleep(0.1)
-        u.read()            # 清空回显
-        uart = u
-        print("UART%d 可用 (115200)" % uart_id)
+        # 尝试读取，检查是否成功
+        test_data = test_uart.read()
+        
+        # 如果UART看起来可用
+        # 改进检测逻辑：检查是否能成功创建UART
+        uart = test_uart
+        uart_available = True
+        print("UART%d initialized (baudrate: 115200)" % uart_id)
         break
+            
     except Exception as e:
-        print("UART%d 不可用: %s" % (uart_id, e))
+        print("UART%d failed: %s" % (uart_id, str(e)))
 
-if uart is None:
-    print("无可用 UART，桥接将进入 echo 模式")
+if not uart_available:
+    print("Warning: No UART available, running in TCP-only mode")
+    uart = None
 
-# ========== TCP 桥接 (5001) ==========
+# Create a TCP server socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind(('', 5001))
 s.listen(1)
-print("Bridge on port 5001")
+print("TCP-UART bridge service started")
+print("Listening on port: 5001")
+print("")
+print("To stop: Press reset button or remove power")
+print("")
 
-while True:
-    conn, addr = s.accept()
-    conn.setblocking(False)
-    print("Client:", addr)
-    last = time.time()
+# 修复UART读取逻辑
+def read_uart_data():
+    """尝试从UART读取数据，处理各种异常情况"""
+    if uart is None:
+        return None
+    
+    try:
+        # 尝试读取数据
+        data = uart.read()
+        
+        # 检查返回值类型
+        if data is None:
+            return None
+        elif isinstance(data, (bytes, bytearray)) and len(data) > 0:
+            print("UART data received:", data[:20])  # 打印前20字节用于调试
+            return data
+        else:
+            return None
+    except Exception as e:
+        print("UART read exception:", e)
+        return None
 
+try:
     while True:
-        # UART → TCP
-        if uart:
-            try:
-                data = uart.read()
-                if data and len(data) > 0:
-                    conn.send(data)
-                    last = time.time()
-            except Exception as e:
-                print("UART read error:", e)
-
-        # TCP → UART
+        print("Waiting for client connection...")
+        conn, addr = s.accept()
+        conn.setblocking(False) # Non-blocking for bi-directional flow
+        print("Client connected:", addr)
+        
+        # 发送欢迎消息
+        if uart_available:
+            welcome_msg = b"UART-TCP Bridge Ready. UART is available at 115200 baud.\n"
+        else:
+            welcome_msg = b"TCP Server Ready. UART is not available.\n"
+        conn.send(welcome_msg)
+        
         try:
-            tcp_data = conn.recv(1024)
-            if tcp_data:
-                # 调试：在串口 REPL 中显示收到的 TCP 数据
-                print("TCP -> UART:", tcp_data[:50])
-                if uart:
-                    try:
-                        uart.write(tcp_data)
-                        print("Sent to UART OK")
-                    except Exception as e:
-                        print("UART write error:", e)
-                else:
-                    conn.send(b"Echo: " + tcp_data + b"\r\n")
-                last = time.time()
-            else:
-                print("Client closed")
-                break
-        except OSError:
-            pass
+            while True:
+                # 1. UART -> TCP (如果UART可用)
+                if uart_available and uart is not None:
+                    uart_data = read_uart_data()
+                    if uart_data:
+                        # 尝试将UART数据发送到TCP客户端
+                        try:
+                            conn.send(uart_data)
+                            print("Sent UART data to TCP client")
+                        except Exception as e:
+                            print("TCP send error:", e)
+                            break  # 连接可能已关闭
+                
+                # 2. TCP -> UART
+                try:
+                    tcp_data = conn.recv(1024)
+                    if tcp_data:
+                        print("TCP data received:", tcp_data[:20])  # 打印前20字节用于调试
+                        # 如果UART可用，转发到UART
+                        if uart_available and uart is not None:
+                            try:
+                                uart.write(tcp_data)
+                                print("Forwarded TCP data to UART")
+                            except Exception as e:
+                                print("UART write error:", e)
+                        else:
+                            # 如果没有UART，回显给客户端
+                            echo_msg = b"Echo: " + tcp_data + b"\n"
+                            try:
+                                conn.send(echo_msg)
+                                print("Sent echo response to TCP client")
+                            except Exception as e:
+                                print("TCP echo send error:", e)
+                    else:
+                        print("Client disconnected")
+                        break # Client closed connection
+                except OSError:
+                    pass # No data available to recv
+                except Exception as e:
+                    print("TCP recv exception:", e)
+                    break
+                    
+                # 添加小延迟避免过度占用CPU
+                time.sleep(0.01)
+                
+        except KeyboardInterrupt:
+            print("Interrupted, closing connection...")
+            raise
         except Exception as e:
-            print("TCP recv error:", e)
-            break
-
-        if time.time() - last > 60:
-            print("Idle timeout")
-            break
-        time.sleep(0.01)
-
-    conn.close()
-    gc.collect()
-    print("Disconnected")
+            print("Connection error:", e)
+        finally:
+            conn.close()
+            print("Connection closed")
+            
+except KeyboardInterrupt:
+    print("\nProgram interrupted by user")
+    print("Cleaning up resources...")
+    s.close()
+    print("TCP server closed")
+    print("Program exited")
+except Exception as e:
+    print("Fatal error:", e)
+    s.close()
+    print("TCP server closed")
+    print("Program exited")
